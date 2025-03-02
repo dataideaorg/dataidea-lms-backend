@@ -9,6 +9,7 @@ from .serializers import UserSerializer, UserProfileSerializer, UserRegistration
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 from rest_framework import serializers
+from .services import AuthService
 
 # Create your views here.
 
@@ -33,12 +34,31 @@ class UserViewSet(viewsets.ModelViewSet):
         serializer = UserRegistrationSerializer(data=request.data)
         try:
             serializer.is_valid(raise_exception=True)
-            user = serializer.save()
-            # Log the user in after registration
+            
+            # First, try to register with the main backend
+            main_backend_response = AuthService.register_with_main_backend(serializer.validated_data)
+            
+            # If main backend registration is successful, create local user
+            try:
+                user = User.objects.get(username=serializer.validated_data['username'])
+            except User.DoesNotExist:
+                user = User.objects.create_user(
+                    username=serializer.validated_data['username'],
+                    password=serializer.validated_data['password'],
+                    first_name=serializer.validated_data['first_name'],
+                    last_name=serializer.validated_data['last_name'],
+                    email=serializer.validated_data.get('email', '')
+                )
+                # Create associated profile
+                UserProfile.objects.get_or_create(user=user)
+            
+            # Log the user in
             login(request, user)
+            
             # Return the user profile data
             profile_serializer = UserProfileSerializer(user.userprofile)
             return Response(profile_serializer.data, status=status.HTTP_201_CREATED)
+            
         except serializers.ValidationError as e:
             return Response({'errors': e.detail}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
@@ -58,21 +78,34 @@ class UserViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        user = authenticate(username=username, password=password)
-        if user:
-            if not user.is_active:
-                return Response(
-                    {'error': 'This account is inactive'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            login(request, user)
-            serializer = UserProfileSerializer(user.userprofile)
-            return Response(serializer.data)
+        # First, try to authenticate with the main backend
+        auth_response = AuthService.authenticate_with_main_backend(username, password)
+        if not auth_response:
+            return Response(
+                {'error': 'Invalid credentials'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
-        return Response(
-            {'error': 'Invalid credentials'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        # If main backend authentication successful, get or create local user
+        try:
+            user = User.objects.get(username=username)
+            # Update user info if needed
+            user.save()
+        except User.DoesNotExist:
+            # Create new user in LMS database
+            user = User.objects.create_user(
+                username=username,
+                password=password  # This will be hashed by Django
+            )
+            # Create associated profile
+            UserProfile.objects.get_or_create(user=user)
+        
+        # Log the user in to create session
+        login(request, user)
+        
+        # Return user profile data
+        serializer = UserProfileSerializer(user.userprofile)
+        return Response(serializer.data)
     
     @action(detail=False, methods=['post'])
     def logout(self, request):

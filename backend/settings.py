@@ -37,10 +37,13 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3001",
     "http://localhost:3002",
     "http://localhost:3003",
+    "http://localhost:3004",
      "http://localhost:8000",  # Vite default port
     "http://localhost:8001",
     "http://localhost:8002",
     "http://localhost:8003",    
+    "http://localhost:8004",    
+    "http://localhost:8005",    
 ]
 
 # Application definition
