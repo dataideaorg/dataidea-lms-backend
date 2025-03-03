@@ -2,7 +2,7 @@ from django.shortcuts import render
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.contrib.auth import login, logout, authenticate
+from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from .models import UserProfile
 from .serializers import UserSerializer, UserProfileSerializer, UserRegistrationSerializer
@@ -10,6 +10,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.decorators import method_decorator
 from rest_framework import serializers
 from .services import AuthService
+from rest_framework_simplejwt.tokens import RefreshToken
 
 # Create your views here.
 
@@ -20,7 +21,7 @@ class UserViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     
     def get_permissions(self):
-        if self.action in ['create', 'login', 'csrf_token', 'register']:
+        if self.action in ['create', 'login', 'register']:
             return [permissions.AllowAny()]
         return super().get_permissions()
     
@@ -28,6 +29,13 @@ class UserViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'register']:
             return UserRegistrationSerializer
         return UserSerializer
+    
+    def get_tokens_for_user(self, user):
+        refresh = RefreshToken.for_user(user)
+        return {
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+        }
     
     @action(detail=False, methods=['post'])
     def register(self, request):
@@ -52,12 +60,15 @@ class UserViewSet(viewsets.ModelViewSet):
                 # Create associated profile
                 UserProfile.objects.get_or_create(user=user)
             
-            # Log the user in
-            login(request, user)
+            # Generate tokens
+            tokens = self.get_tokens_for_user(user)
             
-            # Return the user profile data
+            # Return the user profile data and tokens
             profile_serializer = UserProfileSerializer(user.userprofile)
-            return Response(profile_serializer.data, status=status.HTTP_201_CREATED)
+            return Response({
+                **profile_serializer.data,
+                **tokens
+            }, status=status.HTTP_201_CREATED)
             
         except serializers.ValidationError as e:
             return Response({'errors': e.detail}, status=status.HTTP_400_BAD_REQUEST)
@@ -100,27 +111,15 @@ class UserViewSet(viewsets.ModelViewSet):
             # Create associated profile
             UserProfile.objects.get_or_create(user=user)
         
-        # Log the user in to create session
-        login(request, user)
+        # Generate tokens
+        tokens = self.get_tokens_for_user(user)
         
-        # Return user profile data
+        # Return user profile data and tokens
         serializer = UserProfileSerializer(user.userprofile)
-        return Response(serializer.data)
-    
-    @action(detail=False, methods=['post'])
-    def logout(self, request):
-        if request.user.is_authenticated:
-            logout(request)
-            return Response({'detail': 'Successfully logged out'})
-        return Response({'detail': 'Not logged in'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    @action(detail=False, methods=['get'])
-    def csrf_token(self, request):
-        """
-        This endpoint is used to get a CSRF token.
-        The @ensure_csrf_cookie decorator will set the CSRF cookie.
-        """
-        return Response({'detail': 'CSRF cookie set'})
+        return Response({
+            **serializer.data,
+            **tokens
+        })
     
     @action(detail=False, methods=['get', 'patch'])
     def me(self, request):
